@@ -53,8 +53,10 @@ class PolicyGrad():
             return action
         
     def forward(self, state):
+        #print("state (before torching) ", state.shape)
         state = torch.from_numpy(state).float().unsqueeze(0).to(self.device) 
-        return self.net(state)      
+        #print("state (after torching) ", state.shape)
+        return self.net(state) #.to('cpu')       
     
     def update(self, rewards, log_probs):
         discounted_rewards = []
@@ -71,16 +73,19 @@ class PolicyGrad():
         
         policy_gradient = []
         for log_prob, Gt in zip(log_probs, dr):
-            policy_gradient.append(-log_prob*Gt) # "-" for minimization instead of maximization
+            policy_gradient.append(-log_prob*Gt) # - for minimization instead of maximization
+        
+        #print("policy_gradient (before torching): ", np.array(policy_gradient).shape) 
+        #print("policy_gradient (after torching): ", torch.stack(policy_gradient).shape) 
         self.optim.zero_grad()
         policy_grad = torch.stack(policy_gradient).sum()
         policy_grad.backward()
         self.optim.step()
-        return
+
 
 class A2C_v0():
     """
-    Implements Advantage Actor Critic RL agent. Updates to be executed step by step.
+    Implements Advantage Actor Critic RL agent.
     
     Notes
     -----
@@ -107,8 +112,7 @@ class A2C_v0():
         self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
         
         self.device = device 
-        ### Not implemented ###
-        #self.actor.to(self.device) 
+        #self.actor.to(self.device) # move network to device
         #self.critic.to(self.device)
         
     def get_action(self, state, return_log=False, greedy=False):
@@ -131,37 +135,65 @@ class A2C_v0():
             return action
     
     def update(self, reward, log_prob, state, new_state, done):
-        # Wrap variables in tensors
         reward = torch.tensor(reward)
-        old_state = torch.tensor(state).float().unsqueeze(0)    
+        old_state = torch.tensor(state).float().unsqueeze(0)    #try to remove .float()
         new_state = torch.tensor(new_state).float().unsqueeze(0)
-        log_prob = torch.tensor([log_prob]) 
-        # Update critic and then actor
+        #done = torch.LongTensor([done)
+        log_prob = torch.tensor([log_prob]) #.to(self.device)
+        #print("reward ", reward)
+        #print("old_states ", old_state.shape)
+        #print("new_states ", new_state.shape)
+        #print("done ", done)
+        #print("log_prob ", log_prob)
         self.update_critic(reward, new_state, old_state, done)
         self.update_actor(reward, log_prob, new_state, old_state, done)
         return
     
     def update_critic(self, reward, new_state, old_state, done):
+        """
+        Minimize \sum_{t=0}^{T-1}(rewards[t] + gamma V(new_states[t]) - V(old_states[t]) )**2
+        where V(state) is the prediction of the critic.
+        
+        Parameters
+        ----------
+        reward: shape (T,)
+        old_states, new_states: shape (T, observation_space)
+        """
         # Predictions
         V_pred = self.critic(old_state).squeeze()
+        #print("V_pred \n", V_pred)
         # Targets
         V_trg = self.critic(new_state).squeeze()
+        #print("V_trg (init) ", V_trg)
         # done = 1 if new_state is a terminal state
         V_trg = (1-done)*self.gamma*V_trg + reward
+        #print("V_trg (final) ", V_trg)
+        #print("rewards ", rewards.shape)
+        #V_trg = V_trg + rewards
+        #print("V_trg (after +r) \n", V_trg)
+        
         # MSE loss
         loss = (V_pred - V_trg).pow(2).sum()
-        # backprop and update
+        #loss = torch.sum((V_pred - dr)**2, axis = 1)
+        #print("loss ", loss)
+        #loss = torch.mean(loss)
+        #print("loss \n", loss)
         self.critic_optim.zero_grad()
         loss.backward()
         self.critic_optim.step()
         return
     
     def update_actor(self, reward, log_prob, new_state, old_state, done):
-        # compute advantage
+        
         A = (1-done)*self.gamma*self.critic(new_state).squeeze() + reward - self.critic(old_state).squeeze()
-        # compute gradient
+        #print("A \n", A)
+        #A = A/A.std(axis=1).unsqueeze(1)
+        #print("A ", A)
         policy_gradient = - log_prob*A
-        # backprop and update
+        #print("policy_gradient ", policy_gradient)
+        #policy_grad = policy_gradient.item()
+        #print("policy_gradient ", policy_grad)
+        
         self.actor_optim.zero_grad()
         policy_gradient.backward()
         self.actor_optim.step()
@@ -169,7 +201,7 @@ class A2C_v0():
     
 class A2C_v1():
     """
-    Implements Advantage Actor Critic RL agent. Uses episode trajectories to update.
+    Implements Advantage Actor Critic RL agent.
     
     Notes
     -----
@@ -196,7 +228,6 @@ class A2C_v1():
         self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
         
         self.device = device 
-        ### Not implemented ###
         #self.actor.to(self.device) # move network to device
         #self.critic.to(self.device)
         
@@ -220,14 +251,16 @@ class A2C_v1():
             return action
     
     def update(self, rewards, log_probs, states, done):
-        # Wrap variables in tensors
         old_states = torch.tensor(states[:,:-1]).float()    #.to(self.device)
         new_states = torch.tensor(states[:,1:]).float() 
         done = torch.LongTensor(done.astype(int))
+        #print("done ", done)
+        #print("old_states ", old_states)
+        #print("new_states ", new_states)
         log_probs = torch.tensor(log_probs.astype(float)) #.to(self.device)
-        # Update critic and then actor
-        self.update_critic(rewards, new_states, old_states, done)
         self.update_actor(rewards, log_probs, new_states, old_states)
+        self.update_critic(rewards, new_states, old_states, done)
+        
         return
     
     def update_critic(self, rewards, new_states, old_states, done):
@@ -244,37 +277,47 @@ class A2C_v1():
         
         # Predictions
         V_pred = self.critic(old_states).squeeze()
+        #print("V_pred \n", V_pred)
         # Targets
         V_trg = self.critic(new_states).squeeze()
+        #print("V_trg (init) ", V_trg)
         V_trg = (1-done)*self.gamma*V_trg + rewards
+        #print("V_trg (final) ", V_trg)
+        #print("rewards ", rewards.shape)
+        #V_trg = V_trg + rewards
+        #print("V_trg (after +r) \n", V_trg)
+        
         # MSE loss
         loss = torch.sum((V_pred - V_trg)**2)
-        # backprop and update
+        #loss = torch.sum((V_pred - dr)**2, axis = 1)
+        #print("loss ", loss)
+        #loss = torch.mean(loss)
+        #print("loss \n", loss)
         self.critic_optim.zero_grad()
         loss.backward()
         self.critic_optim.step()
         return
     
     def update_actor(self, rewards, log_probs, new_states, old_states):
-        # Discount factors
+        
         Gamma = np.array([self.gamma**i for i in range(rewards.shape[1])]).reshape(1,-1)
-        # reverse everything to use cumsum in right order, then reverse again
+        #print("Gamma ", Gamma)
         Gt = np.cumsum(rewards[:,::-1]*Gamma[:,::-1], axis=1)[:,::-1]
-        # Rescale so that present reward is never discounted
+        #print("rewards ", rewards)
+        #print("Gt ", Gt)
         discounted_rewards =  Gt/Gamma
-        # Wrap into tensor
         dr = torch.tensor(discounted_rewards).float()    #.to(self.device)
-        # Get value as baseline
+        #print("dr ", dr)
         V = self.critic(old_states).squeeze()
-        # Compute advantage as total (discounted) return - value
-        A = dr - V 
-        # Rescale to unitary variance for a trajectory (axis=1)
-        A = A/(A.std(axis=1).unsqueeze(1))
-        # Compute - gradient
+        #print("V (actor) \n", V)
+        A = dr - V # Different way of computing the advantage
+        #print("A \n", A)
+        A = A/A.std(axis=1).unsqueeze(1)
+        #print("A ", A)
         policy_gradient = - log_probs*A
-        # Use it as loss
+        #print("policy_gradient ", policy_gradient)
         policy_grad = torch.sum(policy_gradient)
-        # barckprop and update
+        
         self.actor_optim.zero_grad()
         policy_grad.backward()
         self.actor_optim.step()
