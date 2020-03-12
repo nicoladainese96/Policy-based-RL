@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F 
+from torch.distributions import Categorical
 
 from networks import Actor, Critic #custom module
 
@@ -39,14 +40,12 @@ class PolicyGrad():
         if return_log:
             log_probs = torch.log(probs)
         probs = probs.detach().cpu().numpy().flatten()
-        
         if greedy:
             # Choose action with higher prob
             action = np.argmax(probs) 
         else:
             # Sample action from discrete distribution
             action = np.random.choice(self.n_actions, p=probs)
-        
         if return_log:
             return action, log_probs.view(-1)[action]
         else:
@@ -76,18 +75,17 @@ class PolicyGrad():
         policy_grad = torch.stack(policy_gradient).sum()
         policy_grad.backward()
         self.optim.step()
-        return
-
-class A2C_v0():
+        return policy_grad.item()
+    
+class PolicyGradEnt():
     """
-    Implements Advantage Actor Critic RL agent. Updates to be executed step by step.
+    Implements an RL agent with policy gradient method.
     
     Notes
     -----
     GPU implementation is just sketched; it works but it's slower than with CPU.
     """
-    
-    def __init__(self, observation_space, action_space, lr, gamma, device='cpu'):
+    def __init__(self, observation_space, action_space, lr, gamma, H, device='cpu'):
         """
         Parameters
         ----------
@@ -99,12 +97,90 @@ class A2C_v0():
         
         self.gamma = gamma
         self.lr = lr
+        self.H = H # entropy coeff
+        
+        self.n_actions = action_space
+        self.net = Actor(observation_space, action_space)
+        self.optim = torch.optim.Adam(self.net.parameters(), lr=self.lr)
+        
+        self.device = device 
+        self.net.to(self.device) # move network to device
+        
+        
+    def get_action(self, state, return_log=False, greedy=True):
+        dist = self.forward(state)
+        if return_log:
+            log_probs = torch.log(dist)
+            
+        probs = Categorical(dist)
+        action =  probs.sample().item()
+        
+        if return_log:
+            return action, log_probs.view(-1)[action], dist 
+        else:
+            return action
+        
+    def forward(self, state):
+        state = torch.from_numpy(state).float().unsqueeze(0).to(self.device) 
+        return self.net(state)      
+    
+    def update(self, rewards, log_probs, distributions):
+        discounted_rewards = []
+        for t in range(len(rewards)):
+            Gt = 0
+            pw = 0
+            for r in rewards[t:]:
+                Gt += (self.gamma**pw)*r
+                pw += 1 # exponent of the discount
+            discounted_rewards.append(Gt)
+        
+        dr = torch.tensor(discounted_rewards).to(self.device)
+        dr = (dr - dr.mean())/dr.std()
+        
+        policy_gradient = []
+        for log_prob, Gt in zip(log_probs, dr):
+            policy_gradient.append(-log_prob*Gt) # "-" for minimization instead of maximization
+           
+        distributions = torch.stack(distributions).squeeze() # shape = (T,2)
+        #print("distributions ", distributions.shape)
+        #print("distributions ", distributions)
+        # Compute negative entropy (no - in front)
+        entropy = torch.sum(distributions*torch.log(distributions), axis=1).sum()
+        #print("H x entropy ", self.H*entropy)
+        policy_grad = torch.stack(policy_gradient).sum()
+        #print("Policy grad ", policy_grad)
+        loss = policy_grad + self.H*entropy
+        self.optim.zero_grad()
+        loss.backward()
+        self.optim.step()
+        return policy_grad.item()
+
+class A2C_v0():
+    """
+    Implements Advantage Actor Critic RL agent. Updates to be executed step by step.
+    
+    Notes
+    -----
+    GPU implementation is just sketched; it works but it's slower than with CPU.
+    """
+    
+    def __init__(self, observation_space, action_space, lr_actor, lr_critic, gamma, device='cpu'):
+        """
+        Parameters
+        ----------
+        observation_space: int
+            Number of flattened entries of the state
+        action_space: int
+            Number of (discrete) possible actions to take
+        """
+        
+        self.gamma = gamma
         
         self.n_actions = action_space
         self.actor = Actor(observation_space, action_space)
         self.critic = Critic(observation_space)
-        self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
-        self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
+        self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=lr_actor)
+        self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=lr_critic)
         
         self.device = device 
         ### Not implemented ###
@@ -117,14 +193,14 @@ class A2C_v0():
         if return_log:
             log_probs = torch.log(probs)
         probs = probs.detach().cpu().numpy().flatten()
-        
+        if np.any(probs > 0.9):
+            print("probs ", probs)
         if greedy:
             # Choose action with higher prob
             action = np.argmax(probs) 
         else:
             # Sample action from discrete distribution
             action = np.random.choice(self.n_actions, p=probs)
-        
         if return_log:
             return action, log_probs.view(-1)[action]
         else:
@@ -206,7 +282,8 @@ class A2C_v1():
         if return_log:
             log_probs = torch.log(probs)
         probs = probs.detach().cpu().numpy().flatten()
-        
+        if np.any(probs > 0.9):
+            print("probs ", probs)
         if greedy:
             # Choose action with higher prob
             action = np.argmax(probs) 
@@ -269,7 +346,8 @@ class A2C_v1():
         # Compute advantage as total (discounted) return - value
         A = dr - V 
         # Rescale to unitary variance for a trajectory (axis=1)
-        A = A/(A.std(axis=1).unsqueeze(1))
+        A = (A - A.mean(axis=1).unsqueeze(1))/(A.std(axis=1).unsqueeze(1))
+        #print("A ", A)
         # Compute - gradient
         policy_gradient = - log_probs*A
         # Use it as loss
