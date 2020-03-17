@@ -550,7 +550,6 @@ class A2C_v1():
         A = dr - V 
         # Rescale to unitary variance for a trajectory (axis=1)
         #A = (A - A.mean(axis=1).unsqueeze(1))/(A.std(axis=1).unsqueeze(1))
-        print("A ", A)
         #print("A ", A.shape)
         #print("log_probs ", log_probs.shape)
         # Compute - gradient
@@ -558,7 +557,6 @@ class A2C_v1():
         #print("policy_gradient ", policy_gradient.shape)
         # Use it as loss
         policy_grad = torch.sum(policy_gradient)
-        print("policy_grad ", policy_grad)
         # barckprop and update
         self.actor_optim.zero_grad()
         policy_grad.backward()
