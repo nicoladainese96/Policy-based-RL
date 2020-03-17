@@ -9,14 +9,26 @@ class Sandbox():
         self.state = np.asarray(initial)
         self.goal = goal
         self.R0 = R0
-        # the agent makes an action (0 is up, 1 is down, 2 is right, 3 is left)
+        # top-left corner is [0,0], bottom-right is [x,y]
+        # vertical direction is x (first coordinate)
+        # horizontal direction is y (second coordinate)
         self.action_map = {
                             0: [0, 1],
                             1: [0, -1],
                             2: [1, 0],
                             3: [-1, 0],
                           }
-        self.max_steps = 5*int(np.max([x,y])) # 5 times the greatest linear dimension
+        self.action_dict = {
+                            0: 'Right',
+                            1: 'Left',
+                            2: 'Down',
+                            3: 'Up',
+                          }
+        self.n_actions = len(self.action_map.keys())
+        if max_steps == 0:
+            self.max_steps = 5*int(np.max([x,y])) # 5 times the greatest linear dimension
+        else:
+            self.max_steps = max_steps
         self.current_steps = 0
         
     def step(self, action):
@@ -27,9 +39,10 @@ class Sandbox():
         movement = self.action_map[action]
         # Compute next vectorial state
         next_state = self.state + np.asarray(movement)
-        if(self.check_boundaries(next_state)):
+        if not (self.check_boundaries(next_state)):
             # Enforce staying within boundaries with negative reward
             reward = -1
+            #pass
         else:
             # Update state only if valid movement
             self.state = next_state
@@ -49,12 +62,19 @@ class Sandbox():
         enc_state = self.encode_state()
         return enc_state, reward, terminal, info
 
-    # map action index to movement
+    #def check_boundaries(self, state):
+    #    out = len([num for num in state if num < 0])
+    #    out += len([num for num in (self.boundary - np.asarray(state)) if num <= 0])
+    #    return out > 0
     def check_boundaries(self, state):
-        out = len([num for num in state if num < 0])
-        out += len([num for num in (self.boundary - np.asarray(state)) if num <= 0])
-        return out > 0
-
+        x_ok = (state[0] >= 0) and (state[0] < self.boundary[0])
+        y_ok = (state[1] >= 0) and (state[1] < self.boundary[1])
+        
+        if x_ok and y_ok:
+            return True
+        else:
+            return False
+        
     def encode_state(self):
         # encode row by row
         # e = X*y + x
@@ -62,8 +82,40 @@ class Sandbox():
         return enc_state
     
 
-    def reset(self):
+    def reset(self, random_init=False):
+        if random_init:
+            self.initial[0] = np.random.choice(self.boundary[0]-1)
+            self.initial[1] = np.random.choice(self.boundary[1]-1)
         self.state = self.initial
         self.current_steps = 0
         return self.encode_state()
-
+    
+    def dist_to_goal(self, state):
+        dx = np.abs(state[0] - self.goal[0])
+        dy = np.abs(state[1] - self.goal[1])
+        return dx + dy
+    
+    def get_optimal_action(self):
+        optimal = np.zeros(self.n_actions)
+        d0 = self.dist_to_goal(self.state)
+        # consider all actions
+        for action in range(self.n_actions):
+            # compute for each the resulting state)
+            movement = self.action_map[action]
+            next_state = self.state + np.asarray(movement)
+            if(self.check_boundaries(next_state)):
+                # if the state is admitted -> compute the distance to the goal 
+                d = self.dist_to_goal(next_state)
+                # if the new distance is smaller than the old one, is an optimal action (optimal = 1.)
+                if d < d0:
+                    optimal[action] = 1.
+                else:
+                    optimal[action] = 0.
+            else:
+                # oterwise is not (optimal = 0)
+                optimal[action] = 0.
+        # once we have the vector of optimal, divide them by the sum
+        probs = optimal/optimal.sum()
+        # finally sample the action and return it together with the log of the probability
+        opt_action = np.random.choice(self.n_actions, p=probs)
+        return opt_action

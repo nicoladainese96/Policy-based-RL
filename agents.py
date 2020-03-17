@@ -356,6 +356,8 @@ class A2C_v0():
             state = torch.from_numpy(state)
             log_probs = self.actor(state)
             dist = torch.exp(log_probs)
+            if np.any(dist.detach().numpy() > 0.5):
+                print("dist ", dist)
             probs = Categorical(dist)
             action =  probs.sample().item()
         else:
@@ -394,12 +396,16 @@ class A2C_v0():
     def update_critic(self, reward, new_state, old_state, done):
         # Predictions
         V_pred = self.critic(old_state).squeeze()
+        #print("V_pred ", V_pred)
         # Targets
         V_trg = self.critic(new_state).squeeze()
+        #print("V_trg (net) ", V_trg)
         # done = 1 if new_state is a terminal state
         V_trg = (1-done)*self.gamma*V_trg + reward
+        #print("V_trg (+r) ", V_trg)
         # MSE loss
         loss = (V_pred - V_trg).pow(2).sum()
+        #print("loss ", loss)
         # backprop and update
         self.critic_optim.zero_grad()
         loss.backward()
@@ -409,8 +415,10 @@ class A2C_v0():
     def update_actor(self, reward, log_prob, new_state, old_state, done):
         # compute advantage
         A = (1-done)*self.gamma*self.critic(new_state).squeeze() + reward - self.critic(old_state).squeeze()
+        #print("Advantage ", A)
         # compute gradient
         policy_gradient = - log_prob*A
+        #print("policy_gradient ", policy_gradient)
         # backprop and update
         self.actor_optim.zero_grad()
         policy_gradient.backward()
@@ -426,7 +434,8 @@ class A2C_v1():
     GPU implementation is just sketched; it works but it's slower than with CPU.
     """
     
-    def __init__(self, observation_space, action_space, lr, gamma, device='cpu'):
+    def __init__(self, observation_space, action_space, lr, gamma, 
+                 device='cpu', discrete=False, project_dim=8):
         """
         Parameters
         ----------
@@ -440,10 +449,15 @@ class A2C_v1():
         self.lr = lr
         
         self.n_actions = action_space
-        self.actor = Actor(observation_space, action_space)
-        self.critic = Critic(observation_space)
-        self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
-        self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
+        self.discrete = discrete
+        if self.discrete:
+            self.actor = DiscreteActor(observation_space, action_space, project_dim)
+            self.critic = DiscreteCritic(observation_space, project_dim)
+        else:
+            self.actor = Actor(observation_space, action_space)
+            self.critic = Critic(observation_space)
+        self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=lr)
+        self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=lr)
         
         self.device = device 
         ### Not implemented ###
@@ -451,20 +465,27 @@ class A2C_v1():
         #self.critic.to(self.device)
         
     def get_action(self, state, return_log=False, greedy=True):
-        state = torch.from_numpy(state).float().unsqueeze(0)    #.to(self.device) 
-        probs = self.actor(state)
-        if return_log:
-            log_probs = torch.log(probs)
-        probs = probs.detach().cpu().numpy().flatten()
-        if np.any(probs > 0.9):
-            print("probs ", probs)
-        if greedy:
-            # Choose action with higher prob
-            action = np.argmax(probs) 
+        if self.discrete:
+            state = torch.from_numpy(state)
+            log_probs = self.actor(state)
+            dist = torch.exp(log_probs)
+            if np.any(dist.detach().numpy() > 0.5):
+                print("dist ", dist)
+            probs = Categorical(dist)
+            action =  probs.sample().item()
         else:
-            # Sample action from discrete distribution
-            action = np.random.choice(self.n_actions, p=probs)
-        
+            state = torch.from_numpy(state).float().unsqueeze(0)    #.to(self.device) 
+            probs = self.actor(state)
+            if return_log:
+                log_probs = torch.log(probs)
+            probs = probs.detach().cpu().numpy().flatten()
+            if greedy:
+                # Choose action with higher prob
+                action = np.argmax(probs) 
+            else:
+                # Sample action from discrete distribution
+                action = np.random.choice(self.n_actions, p=probs)
+                
         if return_log:
             return action, log_probs.view(-1)[action]
         else:
@@ -472,8 +493,12 @@ class A2C_v1():
     
     def update(self, rewards, log_probs, states, done):
         # Wrap variables in tensors
-        old_states = torch.tensor(states[:,:-1]).float()    #.to(self.device)
-        new_states = torch.tensor(states[:,1:]).float() 
+        if self.discrete:
+            old_states = torch.tensor(states[:,:-1])
+            new_states = torch.tensor(states[:,1:])
+        else:
+            old_states = torch.tensor(states[:,:-1]).float()
+            new_states = torch.tensor(states[:,1:]).float()
         done = torch.LongTensor(done.astype(int))
         log_probs = torch.tensor(log_probs.astype(float)) #.to(self.device)
         # Update critic and then actor
@@ -492,12 +517,15 @@ class A2C_v1():
         old_states, new_states: shape (T, observation_space)
         """
         rewards = torch.tensor(rewards)    #.to(self.device)
-        
+        #print("rewards.shape ", rewards.shape)
         # Predictions
         V_pred = self.critic(old_states).squeeze()
+        #print("V_pred.shape ", V_pred.shape)
         # Targets
         V_trg = self.critic(new_states).squeeze()
+        #print("V_trg.shape ", V_trg.shape)
         V_trg = (1-done)*self.gamma*V_trg + rewards
+        #print("V_trg.shape ", V_trg.shape)
         # MSE loss
         loss = torch.sum((V_pred - V_trg)**2)
         # backprop and update
@@ -515,17 +543,22 @@ class A2C_v1():
         discounted_rewards =  Gt/Gamma
         # Wrap into tensor
         dr = torch.tensor(discounted_rewards).float()    #.to(self.device)
+        #print("dr ", dr.shape)
         # Get value as baseline
         V = self.critic(old_states).squeeze()
         # Compute advantage as total (discounted) return - value
         A = dr - V 
         # Rescale to unitary variance for a trajectory (axis=1)
-        A = (A - A.mean(axis=1).unsqueeze(1))/(A.std(axis=1).unsqueeze(1))
-        #print("A ", A)
+        #A = (A - A.mean(axis=1).unsqueeze(1))/(A.std(axis=1).unsqueeze(1))
+        print("A ", A)
+        #print("A ", A.shape)
+        #print("log_probs ", log_probs.shape)
         # Compute - gradient
         policy_gradient = - log_probs*A
+        #print("policy_gradient ", policy_gradient.shape)
         # Use it as loss
         policy_grad = torch.sum(policy_gradient)
+        print("policy_grad ", policy_grad)
         # barckprop and update
         self.actor_optim.zero_grad()
         policy_grad.backward()

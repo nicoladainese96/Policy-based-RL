@@ -325,5 +325,128 @@ class A2C_v1():
  
     
     
-        
+class SeasideEnv:
     
+    def __init__(self, x, y, initial, goal, R0):
+        self.boundary = np.asarray([x, y])
+        self.state = np.asarray(initial)
+        self.goal = goal
+        self.R0 = R0
+        self.action_map = {
+                            0: [0, 0],
+                            1: [0, 1],
+                            2: [0, -1],
+                            3: [1, 0],
+                            4: [-1, 0],
+                            }
+    # the agent makes an action (0 is stay, 1 is up, 2 is down, 3 is right, 4 is left)
+    def step(self, action):
+        #print("Current state:", self.state)
+        if self.state[0] < 5:
+            reward = self.R0
+        else:
+            reward = self.R0 *5
+        movement = self.action_map[action]
+        if (action == 0 and (self.state == self.goal).all()):
+            reward = 1
+        next_state = self.state + np.asarray(movement)
+        if(self.check_boundaries(next_state)):
+            reward = -1
+        else:
+            self.state = next_state
+            
+        #print("Current movement:", movement)
+        #print("Reward obtained:", reward)
+        return [self.state, reward]
+
+    # map action index to movement
+    def check_boundaries(self, state):
+        out = len([num for num in state if num < 0])
+        out += len([num for num in (self.boundary - np.asarray(state)) if num <= 0])
+        return out > 0
+    
+class BridgeEnv:
+    
+    def __init__(self, x, y, initial, R0):
+        self.boundary = np.asarray([x, y])
+        self.state = np.asarray(initial)
+        self.initial = np.asarray(initial)
+        self.goal = [4,9]
+        self.R0 = R0
+        self.action_map = {
+                            0: [0, 0],
+                            1: [0, 1],
+                            2: [0, -1],
+                            3: [1, 0],
+                            4: [-1, 0],
+                            }
+    # the agent makes an action (0 is stay, 1 is up, 2 is down, 3 is right, 4 is left)
+    def step(self, action):
+        #print("Current state:", self.state)
+        reward = self.R0
+        movement = self.action_map[action]
+        if (action == 0 and (self.state == self.goal).all()):
+            reward = 1
+        next_state = self.state + np.asarray(movement)
+        # boundary case
+        if(self.check_boundaries(next_state)):
+            reward = -1
+        # cliff case -> re-start from beginning + big negative reward
+        elif self.check_void(next_state):
+            reward = -10
+            self.state = self.initial
+        else:
+            self.state = next_state
+            
+        #print("Current movement:", movement)
+        #print("Reward obtained:", reward)
+        return [self.state, reward]
+
+    # map action index to movement
+    def check_boundaries(self, state):
+        out = len([num for num in state if num < 0])
+        out += len([num for num in (self.boundary - np.asarray(state)) if num <= 0])
+        return out > 0
+    
+    def check_void(self, state):
+        if state[0] in [i for i in range(1,9)] and state[1] in [i for i in range(2,8)]:
+            return True
+        else:
+            return False    
+    
+    def get_optimal_action(self):
+        print("\nCurrent state: ", self.state)
+        optimal = np.zeros(self.n_actions)
+        d0 = self.dist_to_goal(self.state)
+        print("Original distance ", d0)
+        # consider all actions
+        for action in range(self.n_actions):
+            # compute for each the resulting state
+            print("\n\tAction : "+self.action_dict[action])
+            movement = self.action_map[action]
+            next_state = self.state + np.asarray(movement)
+            print("\tNext state: ", next_state)
+            if(self.check_boundaries(next_state)):
+                print("\tAction allowed.")
+                # if the state is admitted -> compute the distance to the goal 
+                d = self.dist_to_goal(next_state)
+                print("\tNew distance ", d)
+                # if the new distance is smaller than the old one, is an optimal action (optimal = 1.)
+                if d < d0:
+                    optimal[action] = 1.
+                else:
+                    optimal[action] = 0.
+            else:
+                print("\tAction prohibited.")
+                # oterwise is not (optimal = 0)
+                optimal[action] = 0.
+            
+            print("\tAction is optimal: ", optimal[action] == 1)
+        print("\noptimal ", optimal)
+        # once we have the vector of optimal, divide them by the sum
+        probs = optimal/optimal.sum()
+        print("probs ", probs)
+        # finally sample the action and return it together with the log of the probability
+        opt_action = np.random.choice(self.n_actions, p=probs)
+        print("Action chosen: ", opt_action, "("+self.action_dict[opt_action]+")\n")
+        return opt_action

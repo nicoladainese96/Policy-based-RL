@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import time
 import environment
 
-def render(agent, save=False, x=10, y=10, goal=[9,9], initial=[0,0], greedy=False):
+def render(agent=None, save=False, x=10, y=10, goal=[9,9], initial=[0,0], greedy=False):
     fig = plt.figure(figsize = (8,6))
     # initialize environment
     env = environment.Sandbox(x, y, initial, goal, max_steps=50)
@@ -26,7 +26,10 @@ def render(agent, save=False, x=10, y=10, goal=[9,9], initial=[0,0], greedy=Fals
     state = env.reset()
     for step in range(0, env.max_steps):
         state = np.array([state])
-        action, log_prob = agent.get_action(state, return_log = True, greedy=greedy)
+        if agent is None:
+            action = env.get_optimal_action()
+        else:
+            action, log_prob = agent.get_action(state, return_log = True, greedy=greedy)
         new_state, reward, terminal, info = env.step(action) # gym standard step's output
 
         plt.cla() # clear current axis from previous drawings -> prevents matplotlib from slowing down
