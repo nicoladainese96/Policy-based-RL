@@ -27,8 +27,8 @@ class Actor(nn.Module):
     def forward(self, state):
         out = F.relu(self.linear1(state))
         out = F.relu(self.linear2(out))
-        probs = F.softmax(self.linear3(out), dim=1)
-        return probs
+        log_probs = F.log_softmax(self.linear3(out), dim=1)
+        return log_probs
 
 class DiscreteActor(nn.Module):
     """
