@@ -58,7 +58,8 @@ class DiscreteA2C():
         dr = torch.tensor(discounted_rewards).float()  
         old_states = torch.tensor(states[:-1]).view(1,-1)
         new_states = torch.tensor(states[1:]).view(1,-1)
-        log_probs = torch.tensor(log_probs.astype(float)) 
+        #log_probs = torch.tensor(log_probs.astype(float)) 
+        log_probs = torch.stack(log_probs)
         
         ### Update critic and then actor ###
         critic_loss = self.update_critic(dr, old_states)
