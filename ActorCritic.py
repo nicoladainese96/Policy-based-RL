@@ -126,7 +126,7 @@ class A2C():
         V_pred = self.critic(old_states).squeeze()
         V_trg = self.critic(new_states).squeeze()
         V_trg = (1-done)*self.gamma*V_trg + rewards
-        loss = torch.sum((V_pred - V_trg)**2)
+        loss = torch.sum((V_pred - V_trg.detach())**2)
         
         # Backpropagate and update
         
