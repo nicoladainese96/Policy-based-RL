@@ -4,19 +4,29 @@ import torch.nn as nn
 import torch.nn.functional as F 
 from torch.distributions import Categorical
 
-from networks import Actor, Critic, DiscreteActor, DiscreteCritic #custom module
+from networks import Actor, Critic #custom module
 
 class A2C():
     """
-    Implements Advantage Actor Critic RL agent. 
+    Advantage Actor-Critic RL agent. 
     
     Notes
     -----
-    GPU implementation is just sketched; it works but it's slower than with CPU.
-    """
+    * GPU implementation is still work in progress.
+    * Always uses 2 separate networks for the critic,one that learns from new experience 
+      (student/critic) and the other one (critic_target/teacher)that is more conservative 
+      and whose weights are updated through an exponential moving average of the weights 
+      of the critic, i.e.
+          target.params = (1-tau)*target.params + tau* critic.params
+    * In the case of Monte Carlo estimation the critic_target is never used
+    * Possible to use twin networks for the critic and the critic target for improved 
+      stability. Critic target is used for updates of both the actor and the critic and
+      its output is the minimum between the predictions of its two internal networks.
+      
+    """ 
     
     def __init__(self, observation_space, action_space, lr, gamma, TD=True,
-                 device='cpu', discrete=False, project_dim=8):
+                  discrete=False, project_dim=8, twin=False, tau = 1., device='cpu'):
         """
         Parameters
         ----------
@@ -28,18 +38,26 @@ class A2C():
             Learning rate
         gamma: float in [0,1]
             Discount factor
-        TD: bool
+        TD: bool (default=True)
             If True, uses Temporal Difference for the critic's estimates
             Otherwise uses Monte Carlo estimation
-        device: str in {'cpu','cuda'}
-            Not implemented at the moment
-        discrete: bool
+        discrete: bool (default=False)
             If True, adds an embedding layer both in the actor 
             and the critic networks before processing the state.
             Should be used if the state is a simple integer in [0, observation_space -1]
-        project_dim: int
+        project_dim: int (default=8)
             Number of dimensions of the embedding space (e.g. number of dimensions of
             embedding(state) ). Higher dimensions are more expressive.
+        twin: bool (default=False)
+            Enables twin networks both for critic and critic_target
+        tau: float in [0,1] (default = 1.)
+            Regulates how fast the critic_target gets updates, i.e. what percentage of the weights
+            inherits from the critic. If tau=1., critic and critic_target are identical 
+            at every step, if tau=0. critic_target is unchangable. 
+            As a default this feature is disabled setting tau = 1, but if one wants to use it a good
+            empirical value is 0.005.
+        device: str in {'cpu','cuda'}
+            Not implemented at the moment
         """
         
         self.gamma = gamma
@@ -47,20 +65,28 @@ class A2C():
         
         self.n_actions = action_space
         self.discrete = discrete
-        if self.discrete:
-            self.actor = DiscreteActor(observation_space, action_space, project_dim)
-            self.critic = DiscreteCritic(observation_space, project_dim)
-        else:
-            self.actor = Actor(observation_space, action_space)
-            self.critic = Critic(observation_space)
+        self.TD = TD
+        self.twin = twin 
+        self.tau = tau
+        
+        self.actor = Actor(observation_space, action_space, discrete, project_dim)
+        self.critic = Critic(observation_space, discrete, project_dim, twin)
+        
+        if self.TD:
+            self.critic_trg = Critic(observation_space, discrete, project_dim, twin, target=True)
+
+            # Init critic target identical to critic
+            for trg_params, params in zip(self.critic_trg.parameters(), self.critic.parameters()):
+                trg_params.data.copy_(params.data)
+            
         self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=lr)
         
-        self.TD = TD
         self.device = device 
         ### Not implemented ###
         #self.actor.to(self.device) # move network to device
         #self.critic.to(self.device)
+        #self.critic_trg.to(self.device)
         
     def get_action(self, state, return_log=False):
         log_probs = self.forward(state)
@@ -108,9 +134,10 @@ class A2C():
         else:
             old_states = torch.tensor(states[:,:-1]).float()
             new_states = torch.tensor(states[:,1:]).float()
+            
         done = torch.LongTensor(done.astype(int))
         log_probs = torch.stack(log_probs)
-        rewards = torch.tensor(rewards) 
+        rewards = torch.tensor(rewards).float()
         
         ### Update critic and then actor ###
         
@@ -123,10 +150,26 @@ class A2C():
         
         # Compute loss 
         
-        V_pred = self.critic(old_states).squeeze()
-        V_trg = self.critic(new_states).squeeze()
-        V_trg = (1-done)*self.gamma*V_trg + rewards
-        loss = torch.sum((V_pred - V_trg.detach())**2)
+        with torch.no_grad():
+            V_trg = self.critic_trg(new_states).squeeze()
+            #print("V_trg type: ", V_trg.dtype)
+            #print("rewards type: ", rewards.dtype)
+            #print("done type: ", done.dtype)
+            V_trg = (1-done)*self.gamma*V_trg + rewards
+            V_trg = V_trg.squeeze()
+            #print("V_trg type: ", V_trg.dtype)
+            
+        if self.twin:
+            V1, V2 = self.critic(old_states)
+            loss1 = 0.5*F.mse_loss(V1.squeeze(), V_trg)
+            loss2 = 0.5*F.mse_loss(V2.squeeze(), V_trg)
+            loss = loss1 + loss2
+        else:
+            V = self.critic(old_states).squeeze()
+            #print("V type", V.dtype)
+            #print("V_trg type", V_trg.dtype)
+            loss = F.mse_loss(V, V_trg)
+            #print("loss type", loss.dtype)
         
         # Backpropagate and update
         
@@ -134,14 +177,27 @@ class A2C():
         loss.backward()
         self.critic_optim.step()
         
+        # Update critic_target: (1-tau)*old + tau*new
+        
+        for trg_params, params in zip(self.critic_trg.parameters(), self.critic.parameters()):
+                trg_params.data.copy_((1.-self.tau)*trg_params.data + self.tau*params.data)
+        
         return loss.item()
     
     def update_actor_TD(self, rewards, log_probs, new_states, old_states, done):
         
         # Compute gradient 
         
-        V_pred = self.critic(old_states).squeeze()
-        V_trg = (1-done)*self.gamma*self.critic(new_states).squeeze()  + rewards
+        if self.twin:
+            V1, V2 = self.critic(old_states)
+            V_pred = torch.min(V1.squeeze(), V2.squeeze())
+            V1_new, V2_new = self.critic(new_states)
+            V_new = torch.min(V1_new.squeeze(), V2_new.squeeze())
+            V_trg = (1-done)*self.gamma*V_new + rewards
+        else:
+            V_pred = self.critic(old_states).squeeze()
+            V_trg = (1-done)*self.gamma*self.critic(new_states).squeeze()  + rewards
+            
         A = V_trg - V_pred
         policy_gradient = - log_probs*A
         policy_grad = torch.sum(policy_gradient)
@@ -165,6 +221,7 @@ class A2C():
         discounted_rewards =  Gt/Gamma
         
         ### Wrap variables into tensors ###
+        
         dr = torch.tensor(discounted_rewards).float() 
         
         if self.discrete:
@@ -173,6 +230,7 @@ class A2C():
         else:
             old_states = torch.tensor(states[:,:-1]).float()
             new_states = torch.tensor(states[:,1:]).float()
+            
         done = torch.LongTensor(done.astype(int))
         log_probs = torch.stack(log_probs)
         
@@ -187,8 +245,13 @@ class A2C():
 
         # Compute loss
         
-        V_pred = self.critic(old_states).squeeze()
-        loss = torch.sum((V_pred - dr)**2)
+        if self.twin:
+            V1, V2 = self.critic(old_states)
+            V_pred = torch.min(V1.squeeze(), V2.squeeze())
+        else:
+            V_pred = self.critic(old_states).squeeze()
+            
+        loss = F.mse_loss(V_pred, dr)
         
         # Backpropagate and update
         
@@ -202,8 +265,13 @@ class A2C():
         
         # Compute gradient 
         
-        V = self.critic(old_states).squeeze()
-        A = dr - V 
+        if self.twin:
+            V1, V2 = self.critic(old_states)
+            V_pred = torch.min(V1.squeeze(), V2.squeeze())
+        else:
+            V_pred = self.critic(old_states).squeeze()
+            
+        A = dr - V_pred
         policy_gradient = - log_probs*A
         policy_grad = torch.sum(policy_gradient)
  
