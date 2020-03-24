@@ -25,8 +25,8 @@ class A2C():
       
     """ 
     
-    def __init__(self, observation_space, action_space, lr, gamma, TD=True,
-                  discrete=False, project_dim=8, twin=False, tau = 1., device='cpu'):
+    def __init__(self, observation_space, action_space, lr, gamma, TD=True, discrete=False, 
+                 project_dim=8, hiddens = [64,32], twin=False, tau = 1., device='cpu', debug=False):
         """
         Parameters
         ----------
@@ -48,6 +48,11 @@ class A2C():
         project_dim: int (default=8)
             Number of dimensions of the embedding space (e.g. number of dimensions of
             embedding(state) ). Higher dimensions are more expressive.
+        hiddens: list of int (default = [64,32])
+            List containing the number of neurons of each linear hidden layer.
+            Same architecture is considered for the actor and the critic, except from the 
+            output layer, than in one case has the dimension of the action space and a LogSoftmax
+            activation, in the other outputs a scalar (state value)
         twin: bool (default=False)
             Enables twin networks both for critic and critic_target
         tau: float in [0,1] (default = 1.)
@@ -57,7 +62,8 @@ class A2C():
             As a default this feature is disabled setting tau = 1, but if one wants to use it a good
             empirical value is 0.005.
         device: str in {'cpu','cuda'}
-            Not implemented at the moment
+            Implemented, but GPU slower than CPU because it's difficult to optimize a RL agent without
+            a replay buffer, that can be used only in off-policy algorithms.
         """
         
         self.gamma = gamma
@@ -69,11 +75,11 @@ class A2C():
         self.twin = twin 
         self.tau = tau
         
-        self.actor = Actor(observation_space, action_space, discrete, project_dim)
-        self.critic = Critic(observation_space, discrete, project_dim, twin)
+        self.actor = Actor(observation_space, action_space, discrete, project_dim, hiddens=hiddens)
+        self.critic = Critic(observation_space, discrete, project_dim, twin, hiddens=hiddens)
         
         if self.TD:
-            self.critic_trg = Critic(observation_space, discrete, project_dim, twin, target=True)
+            self.critic_trg = Critic(observation_space, discrete, project_dim, twin, target=True, hiddens=hiddens)
 
             # Init critic target identical to critic
             for trg_params, params in zip(self.critic_trg.parameters(), self.critic.parameters()):
@@ -83,10 +89,29 @@ class A2C():
         self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=lr)
         
         self.device = device 
-        ### Not implemented ###
-        #self.actor.to(self.device) # move network to device
-        #self.critic.to(self.device)
-        #self.critic_trg.to(self.device)
+        self.actor.to(self.device) 
+        self.critic.to(self.device)
+        if self.TD:
+            self.critic_trg.to(self.device)
+        
+        if debug:
+            print("="*10 +" A2C HyperParameters "+"="*10)
+            print("Discount factor: ", self.gamma)
+            print("Learning rate: ", self.lr)
+            print("Action space: ", self.n_actions)
+            print("Discrete state space: ", self.discrete)
+            print("Temporal Difference learning: ", self.TD)
+            print("Twin networks: ", self.twin)
+            print("Update critic target factor: ", self.tau)
+            print("Device used: ", self.device)
+            print("\n\n"+"="*10 +" A2C Architecture "+"="*10)
+            print("Actor architecture: \n", self.actor)
+            print("Critic architecture: \n",self.critic)
+            print("Critic target architecture: ")
+            if self.TD:
+                print(self.critic_trg)
+            else:
+                print("Not used")
         
     def get_action(self, state, return_log=False):
         log_probs = self.forward(state)
@@ -110,9 +135,9 @@ class A2C():
             Otherwise state.shape = (episode_len, observation_space)
         """
         if self.discrete:
-            state = torch.from_numpy(state)
+            state = torch.from_numpy(state).to(self.device)
         else:
-            state = torch.from_numpy(state).float().unsqueeze(0) 
+            state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
         log_probs = self.actor(state)
         return log_probs
     
@@ -129,18 +154,17 @@ class A2C():
         ### Wrap variables into tensors ###
         
         if self.discrete:
-            old_states = torch.tensor(states[:-1])
-            new_states = torch.tensor(states[1:])
+            old_states = torch.tensor(states[:-1]).to(self.device)
+            new_states = torch.tensor(states[1:]).to(self.device)
         else:
-            old_states = torch.tensor(states[:,:-1]).float()
-            new_states = torch.tensor(states[:,1:]).float()
+            old_states = torch.tensor(states[:,:-1]).float().to(self.device)
+            new_states = torch.tensor(states[:,1:]).float().to(self.device)
             
-        done = torch.LongTensor(done.astype(int))
-        log_probs = torch.stack(log_probs)
-        rewards = torch.tensor(rewards).float()
+        done = torch.LongTensor(done.astype(int)).to(self.device)
+        log_probs = torch.stack(log_probs).to(self.device)
+        rewards = torch.tensor(rewards).float().to(self.device)
         
         ### Update critic and then actor ###
-        
         critic_loss = self.update_critic_TD(rewards, new_states, old_states, done)
         actor_loss = self.update_actor_TD(rewards, log_probs, new_states, old_states, done)
         
@@ -152,24 +176,18 @@ class A2C():
         
         with torch.no_grad():
             V_trg = self.critic_trg(new_states).squeeze()
-            #print("V_trg type: ", V_trg.dtype)
-            #print("rewards type: ", rewards.dtype)
-            #print("done type: ", done.dtype)
             V_trg = (1-done)*self.gamma*V_trg + rewards
             V_trg = V_trg.squeeze()
-            #print("V_trg type: ", V_trg.dtype)
             
         if self.twin:
+            #print(self.critic(old_states))
             V1, V2 = self.critic(old_states)
             loss1 = 0.5*F.mse_loss(V1.squeeze(), V_trg)
             loss2 = 0.5*F.mse_loss(V2.squeeze(), V_trg)
             loss = loss1 + loss2
         else:
             V = self.critic(old_states).squeeze()
-            #print("V type", V.dtype)
-            #print("V_trg type", V_trg.dtype)
             loss = F.mse_loss(V, V_trg)
-            #print("loss type", loss.dtype)
         
         # Backpropagate and update
         
@@ -222,17 +240,17 @@ class A2C():
         
         ### Wrap variables into tensors ###
         
-        dr = torch.tensor(discounted_rewards).float() 
+        dr = torch.tensor(discounted_rewards).float().to(self.device) 
         
         if self.discrete:
-            old_states = torch.tensor(states[:-1])
-            new_states = torch.tensor(states[1:])
+            old_states = torch.tensor(states[:-1]).to(self.device)
+            new_states = torch.tensor(states[1:]).to(self.device)
         else:
-            old_states = torch.tensor(states[:,:-1]).float()
-            new_states = torch.tensor(states[:,1:]).float()
+            old_states = torch.tensor(states[:,:-1]).float().to(self.device)
+            new_states = torch.tensor(states[:,1:]).float().to(self.device)
             
-        done = torch.LongTensor(done.astype(int))
-        log_probs = torch.stack(log_probs)
+        done = torch.LongTensor(done.astype(int)).to(self.device)
+        log_probs = torch.stack(log_probs).to(self.device)
         
         ### Update critic and then actor ###
         

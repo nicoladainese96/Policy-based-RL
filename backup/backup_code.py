@@ -3,8 +3,82 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F 
 
+HP_scores1 = np.load("HP_scores.npy")
+HP_asymptotic_score1 = np.load("HP_asymptotic_score.npy")
+HP_asymptotic_std1 = np.load("HP_asymptotic_std.npy")
+list_of_dict1 = np.load("list_of_dict.npy", allow_pickle=True)
+
+HP_scores2 = np.load("Results/HP_scores1.npy")
+HP_asymptotic_score2 = np.load("Results/HP_asymptotic_score1.npy")
+HP_asymptotic_std2 = np.load("Results/HP_asymptotic_std1.npy")
+list_of_dict2 = np.load("Results/list_of_dict1.npy", allow_pickle=True)
+
+HP_scores3 = np.load("Results/Colab NotebooksHP_scores.npy")
+HP_asymptotic_score3 = np.load("Results/Colab NotebooksHP_asymptotic_score.npy")
+HP_asymptotic_std3 = np.load("Results/Colab NotebooksHP_asymptotic_std.npy")
+list_of_dict3 = np.load("Results/Colab Notebookslist_of_dict.npy", allow_pickle=True)
+
+HP_scores = np.concatenate((HP_scores1, HP_scores2, HP_scores3))
+HP_asymptotic_score = np.concatenate((HP_asymptotic_score1, HP_asymptotic_score2, HP_asymptotic_score3))
+HP_asymptotic_std = np.concatenate((HP_asymptotic_std1, HP_asymptotic_std2, HP_asymptotic_std3))
+list_of_dict = np.concatenate((list_of_dict1, list_of_dict2, list_of_dict3))
+
 from networks import Actor, Critic #custom module
 
+class experience_buffer():
+    def __init__(self, r_list, logp_list, s_list, done_list):
+        self.r_list = r_list
+        self.logp_list = logp_list
+        self.s_list = s_list
+        self.done_list = done_list
+    
+    def get_exp(self):
+        L = np.min([len(r) for r in self.r_list])
+        r_list_final = np.array([x[-L:] for x in self.r_list])
+        logp_list_final = [x[-L:] for x in self.logp_list]
+        s_list_final = np.array([x[-L-1:] for x in self.s_list])
+        done_list_final = np.array([x[-L:] for x in self.done_list])
+        return r_list_final, logp_list_final, s_list_final, done_list_final
+
+def train_cartpole_A2C(n_epochs = 100, n_batches = 1, lr = 0.01, gamma = 0.99, TD=True, twin=False, tau=1.):
+    # Create environment
+    env = gym.make("CartPole-v1")
+    observation_space = env.observation_space.shape[0]
+    action_space = env.action_space.n
+    # Init agent
+    agent = ActorCritic.A2C(observation_space, action_space, lr, gamma, TD=TD, discrete=False)
+    performance = []
+    for e in range(n_epochs):
+        r_list = []
+        logp_list = []
+        s_list = []
+        done_list = []
+        score = []
+        
+        for b in range(n_batches):
+            rewards, log_probs, states, done = play_episode(agent, env, return_states=True)
+            r_list.append(rewards)
+            logp_list.append(log_probs)
+            s_list.append(states)
+            done_list.append(done)
+            score.append(np.sum(rewards))
+            
+        performance.append(np.mean(score))
+        if (e+1)%10 == 0:
+            print("Episode %d - reward: %.0f"%(e+1, np.mean(performance[-10:])))
+        exp_buff = experience_buffer(r_list, logp_list, s_list, done_list)
+        rewards, log_probs, states, done = exp_buff.get_exp()
+        #print("rewards.shape ", rewards.shape)
+        #print("log_probs ", log_probs)
+        #print("states.shape ", states.shape)
+        #print("done.shape ", done.shape)
+        #print("done ", done)
+        agent.update(rewards, log_probs[0], states, done)
+        
+    return agent, np.array(performance)
+
+
+    
 def train_cartpole_A2C_v0(n_epochs = 100, lr_actor = 0.01, lr_critic = 0.01, gamma = 0.99):
     # Create environment
     env = gym.make("CartPole-v1")

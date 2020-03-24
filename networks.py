@@ -10,7 +10,7 @@ class Actor(nn.Module):
     the third with softmax.
     """
     
-    def __init__(self, observation_space, action_space, discrete=False, project_dim=4):
+    def __init__(self, observation_space, action_space, discrete=False, project_dim=4, hiddens=[64,32]):
         """
         Parameters
         ----------
@@ -22,23 +22,32 @@ class Actor(nn.Module):
             If True, adds an embedding layer before the linear layers
         project_dim: int
             Dimension of the embedding space
+        hiddens: list of int (default = [64,32])
+            List containing the number of neurons of each linear hidden layer.
         """
         super(Actor, self).__init__()
         self.discrete = discrete
+        
+        layers = []
+        
         if self.discrete:
-            self.embedding = nn.Embedding(observation_space, project_dim)
-            self.linear1 = nn.Linear(project_dim, 64)
+            layers.append(nn.Embedding(observation_space, project_dim))
+            layers.append(nn.Linear(project_dim, hiddens[0]))
+            layers.append(nn.ReLU())
         else:
-            self.linear1 = nn.Linear(observation_space, 64)
-        self.linear2 = nn.Linear(64, 32)
-        self.linear3 = nn.Linear(32, action_space)
-    
+            layers.append(nn.Linear(observation_space, hiddens[0]))
+            layers.append(nn.ReLU())
+            
+        for i in range(0,len(hiddens)-1):
+            layers.append(nn.Linear(hiddens[i], hiddens[i+1]))
+            layers.append(nn.ReLU())
+        
+        layers.append(nn.Linear(hiddens[-1], action_space))
+        layers.append(nn.LogSoftmax(dim=1))  
+        self.net = nn.Sequential(*layers)
+        
     def forward(self, state):
-        if self.discrete:
-            state = self.embedding(state)
-        out = F.relu(self.linear1(state))
-        out = F.relu(self.linear2(out))
-        log_probs = F.log_softmax(self.linear3(out), dim=1)
+        log_probs = self.net(state)
         return log_probs
         
 class BasicCritic(nn.Module):
@@ -48,45 +57,52 @@ class BasicCritic(nn.Module):
     Returns the value of a state.
     """
     
-    def __init__(self, observation_space, discrete=False, project_dim=4):
+    def __init__(self, observation_space, discrete=False, project_dim=4, hiddens=[64,32]):
         """
         Parameters
         ----------
         observation_space: int
             Number of flattened entries of the state
-        hidden_dim: int
-            Size of the hidden layer
+        hiddens: list of int (default = [64,32])
+            List containing the number of neurons of each linear hidden layer.
         """
         super(BasicCritic, self).__init__()
         self.discrete = discrete
+        
+        layers = []
+        
         if self.discrete:
-            self.embedding = nn.Embedding(observation_space, project_dim)
-            self.linear1 = nn.Linear(project_dim, 64)
+            layers.append(nn.Embedding(observation_space, project_dim))
+            layers.append(nn.Linear(project_dim, hiddens[0]))
+            layers.append(nn.ReLU())
         else:
-            self.linear1 = nn.Linear(observation_space, 64)
-        self.linear2 = nn.Linear(64, 32)
-        self.linear3 = nn.Linear(32, 1)
+            layers.append(nn.Linear(observation_space, hiddens[0]))
+            layers.append(nn.ReLU())
+            
+        for i in range(0,len(hiddens)-1):
+            layers.append(nn.Linear(hiddens[i], hiddens[i+1]))
+            layers.append(nn.ReLU())
+        
+        layers.append(nn.Linear(hiddens[-1], 1)) 
+        self.net = nn.Sequential(*layers)
     
     def forward(self, state):
-        if self.discrete:
-            state = self.embedding(state)
-        out = F.relu(self.linear1(state))
-        out = F.relu(self.linear2(out))
-        return self.linear3(out) 
+        V = self.net(state)
+        return V
     
 class Critic(nn.Module):
     """Implements a generic critic, that can have 2 independent networks is twin=True. """
-    def __init__(self, observation_space, discrete=False, project_dim=4, twin=False, target=False):
+    def __init__(self, observation_space, discrete=False, project_dim=4, twin=False, target=False, hiddens=[64,32]):
         super(Critic, self).__init__()
         
         self.twin = twin
         self.target = target
         
         if twin:
-            self.net1 = BasicCritic(observation_space, discrete, project_dim)
-            self.net2 = BasicCritic(observation_space, discrete, project_dim)
+            self.net1 = BasicCritic(observation_space, discrete, project_dim, hiddens)
+            self.net2 = BasicCritic(observation_space, discrete, project_dim, hiddens)
         else:
-            self.net = BasicCritic(observation_space, discrete, project_dim)
+            self.net = BasicCritic(observation_space, discrete, project_dim, hiddens)
         
     def forward(self, state):
         if self.twin:
