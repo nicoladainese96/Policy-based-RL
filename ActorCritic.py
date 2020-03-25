@@ -149,7 +149,7 @@ class A2C():
         
         return critic_loss, actor_loss
     
-    def update_TD(self, rewards, log_probs, states, done):   
+    def update_TD(self, rewards, log_probs, states, done, bootstrap=None):   
         
         ### Wrap variables into tensors ###
         
@@ -160,6 +160,8 @@ class A2C():
             old_states = torch.tensor(states[:,:-1]).float().to(self.device)
             new_states = torch.tensor(states[:,1:]).float().to(self.device)
             
+        if bootstrap is not None:
+            done[bootstrap] = False 
         done = torch.LongTensor(done.astype(int)).to(self.device)
         log_probs = torch.stack(log_probs).to(self.device)
         rewards = torch.tensor(rewards).float().to(self.device)
@@ -228,16 +230,34 @@ class A2C():
         
         return policy_grad.item()
     
-    def update_MC(self, rewards, log_probs, states, done):   
+    def update_MC(self, rewards, log_probs, states, done, bootstrap=None):   
         
         ### Compute MC discounted returns ###
         
+        if bootstrap is not None:
+            
+            if bootstrap[-1] == True:
+            
+                last_state = torch.tensor(states[0,-1,:]).float().to(self.device).view(1,-1)
+                
+                if self.twin:
+                    V1, V2 = self.critic(last_state)
+                    V_bootstrap = torch.min(V1, V2).cpu().detach().numpy().reshape(1,)
+                else:
+                    V_bootstrap = self.critic(last_state).cpu().detach().numpy().reshape(1,)
+ 
+                rewards = np.concatenate((rewards, V_bootstrap))
+                
         Gamma = np.array([self.gamma**i for i in range(rewards.shape[0])])
         # reverse everything to use cumsum in right order, then reverse again
         Gt = np.cumsum(rewards[::-1]*Gamma[::-1])[::-1]
         # Rescale so that present reward is never discounted
         discounted_rewards =  Gt/Gamma
         
+        if bootstrap is not None:
+            if bootstrap[-1] == True:
+                discounted_rewards = discounted_rewards[:-1] # drop last
+
         ### Wrap variables into tensors ###
         
         dr = torch.tensor(discounted_rewards).float().to(self.device) 

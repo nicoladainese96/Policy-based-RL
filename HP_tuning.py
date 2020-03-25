@@ -4,7 +4,8 @@ import gym
 import ActorCritic
 import time
 
-def play_episode(agent, env, return_states=False):
+def play_episode(agent, env, return_states=False, shape_r=True, bootstrap_flag=False):
+
     # Reset environment (start of an episode)
     state = env.reset()
     rewards = []
@@ -13,7 +14,8 @@ def play_episode(agent, env, return_states=False):
     
     if return_states:
         states = [state]
-        
+    if bootstrap_flag:
+        bootstrap = []
         
     steps = 0
     while True:
@@ -23,10 +25,21 @@ def play_episode(agent, env, return_states=False):
         
         if return_states:
             states.append(new_state)
-            
-        if terminal and 'TimeLimit.truncated' not in info:
-            # give -1 if cartpole falls but not if episode is truncated
-            reward = -1 
+        
+        # See if bootstrap is needed
+        
+        if bootstrap_flag:
+            if terminal and 'TimeLimit.truncated' in info:
+                bootstrap.append(True)
+            else:
+                bootstrap.append(False)
+        
+        # See if reward shaping is needed
+        
+        if shape_r:
+            if terminal and 'TimeLimit.truncated' not in info:
+                # give -1 if cartpole falls but not if episode is truncated
+                reward = -1 
             
         rewards.append(reward)
         log_probs.append(log_prob)
@@ -39,29 +52,47 @@ def play_episode(agent, env, return_states=False):
         
     rewards = np.array(rewards)
     done = np.array(done)
+    bootstrap = np.array(bootstrap)
     
-    if return_states:
-        return rewards, log_probs, np.array(states), done
+    if bootstrap_flag:
+        if return_states:
+            return rewards, log_probs, np.array(states), done, bootstrap
+        else:
+            return rewards, log_probs, done, bootstrap
     else:
-        return rewards, log_probs, done
-    
-def train_cartpole_A2C(agent, env, n_episodes = 1000):
+        if return_states:
+            return rewards, log_probs, np.array(states), done
+        else:
+            return rewards, log_probs, done
+
+def train_cartpole_A2C(agent, env, n_episodes = 1000, shape_r=True, bootstrap_flag=False):
     performance = []
     for e in range(n_episodes):
-        rewards, log_probs, states, done = play_episode(agent, env, return_states=True)
+        
+        if bootstrap_flag:
+            rewards, log_probs, states, done, bootstrap = play_episode(agent, env, True, shape_r, bootstrap_flag)
+        else:
+            rewards, log_probs, states, done = play_episode(agent, env, True, shape_r, bootstrap_flag)
+            
         performance.append(np.sum(rewards))
         if (e+1)%100 == 0:
             print("Episode %d - reward: %.0f"%(e+1, np.mean(performance[-100:])))
-        agent.update(rewards, log_probs, np.array([states]) , done)
-        
+        if bootstrap_flag:
+            agent.update(rewards, log_probs, np.array([states]), done, bootstrap)
+        else:
+            agent.update(rewards, log_probs, np.array([states]), done)
+            
     performance = np.array(performance)
     L = n_episodes // 6
     return performance, performance[-L:].mean(), performance[-L:].std()/np.sqrt(L)
 
-def evaluate_agent(n_runs, n_episodes, **HPs):
+def evaluate_agent(n_runs, n_episodes, shape_r=True, bootstrap_flag=False, **HPs):
     runs_scores = []
     asymptotic_score = []
     asymptotic_std = []
+    
+    print("shape_r", shape_r)
+    print("bootstrap_flag", bootstrap_flag)
     
     for r in range(n_runs):
         
@@ -79,7 +110,7 @@ def evaluate_agent(n_runs, n_episodes, **HPs):
     
         # Evaluate agent on a single run 
         
-        perf, asymptotic_perf, asymptotic_err = train_cartpole_A2C(agent, env, n_episodes)
+        perf, asymptotic_perf, asymptotic_err = train_cartpole_A2C(agent, env, n_episodes, shape_r, bootstrap_flag)
 
         runs_scores.append(perf)
         asymptotic_score.append(asymptotic_perf)
@@ -101,7 +132,7 @@ def print_HP_score(params,score,dev):
     print_parameters(params)
     print("Score: %.4f +/- %.4f"%(score,dev))
     
-def HP_Search(n_runs, n_episodes, list_of_HP_dict):
+def HP_Search(n_runs, n_episodes, list_of_HP_dict, shape_r=False, bootstrap_flag=True):
     
     HP_scores = []
     HP_asymptotic_score = []
@@ -111,7 +142,7 @@ def HP_Search(n_runs, n_episodes, list_of_HP_dict):
     for i, HP in enumerate(list_of_HP_dict):
         
         print("\nEvaluating HP %d / %d... "%(i+1, len(list_of_HP_dict)))
-        runs_scores, asymptotic_score, asymptotic_std = evaluate_agent(n_runs, n_episodes, **HP)
+        runs_scores, asymptotic_score, asymptotic_std = evaluate_agent(n_runs, n_episodes, shape_r, bootstrap_flag, **HP, )
         print_HP_score(HP, asymptotic_score, asymptotic_std)
         HP_scores.append(runs_scores)
         HP_asymptotic_score.append(asymptotic_score)
