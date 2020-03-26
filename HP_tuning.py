@@ -52,7 +52,8 @@ def play_episode(agent, env, return_states=False, shape_r=True, bootstrap_flag=F
         
     rewards = np.array(rewards)
     done = np.array(done)
-    bootstrap = np.array(bootstrap)
+    if bootstrap_flag:
+        bootstrap = np.array(bootstrap)
     
     if bootstrap_flag:
         if return_states:
@@ -90,9 +91,6 @@ def evaluate_agent(n_runs, n_episodes, shape_r=True, bootstrap_flag=False, **HPs
     runs_scores = []
     asymptotic_score = []
     asymptotic_std = []
-    
-    print("shape_r", shape_r)
-    print("bootstrap_flag", bootstrap_flag)
     
     for r in range(n_runs):
         
@@ -132,7 +130,7 @@ def print_HP_score(params,score,dev):
     print_parameters(params)
     print("Score: %.4f +/- %.4f"%(score,dev))
     
-def HP_Search(n_runs, n_episodes, list_of_HP_dict, shape_r=False, bootstrap_flag=True):
+def HP_Search(n_runs, n_episodes, list_of_HP_dict, shape_r=True, bootstrap_flag=False):
     
     HP_scores = []
     HP_asymptotic_score = []
