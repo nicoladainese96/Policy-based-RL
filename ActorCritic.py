@@ -6,6 +6,8 @@ from torch.distributions import Categorical
 
 from networks import Actor, Critic #custom module
 
+debug = False
+
 class A2C():
     """
     Advantage Actor-Critic RL agent. 
@@ -26,7 +28,7 @@ class A2C():
     """ 
     
     def __init__(self, observation_space, action_space, lr, gamma, TD=True, discrete=False, 
-                 project_dim=8, hiddens = [64,32], twin=False, tau = 1., device='cpu', debug=False):
+                 project_dim=8, hiddens = [64,32], twin=False, tau = 1., n_steps = 1, device='cpu', debug=False):
         """
         Parameters
         ----------
@@ -61,7 +63,9 @@ class A2C():
             at every step, if tau=0. critic_target is unchangable. 
             As a default this feature is disabled setting tau = 1, but if one wants to use it a good
             empirical value is 0.005.
-        device: str in {'cpu','cuda'}
+         n_steps: int (default=1)
+             Number of steps considered in TD update
+        device: str in {'cpu','cuda'} (default='cpu')
             Implemented, but GPU slower than CPU because it's difficult to optimize a RL agent without
             a replay buffer, that can be used only in off-policy algorithms.
         """
@@ -74,6 +78,7 @@ class A2C():
         self.TD = TD
         self.twin = twin 
         self.tau = tau
+        self.n_steps = n_steps
         
         self.actor = Actor(observation_space, action_space, discrete, project_dim, hiddens=hiddens)
         self.critic = Critic(observation_space, discrete, project_dim, twin, hiddens=hiddens)
@@ -101,6 +106,8 @@ class A2C():
             print("Action space: ", self.n_actions)
             print("Discrete state space: ", self.discrete)
             print("Temporal Difference learning: ", self.TD)
+            if self.TD:
+                print("Number of TD steps: ", self.n_steps)
             print("Twin networks: ", self.twin)
             print("Update critic target factor: ", self.tau)
             print("Device used: ", self.device)
@@ -151,38 +158,70 @@ class A2C():
     
     def update_TD(self, rewards, log_probs, states, done, bootstrap=None):   
         
-        ### Wrap variables into tensors ###
+        ### Compute n-steps rewards, states, discount factors and done mask ###
         
-        if self.discrete:
-            old_states = torch.tensor(states[:-1]).to(self.device)
-            new_states = torch.tensor(states[1:]).to(self.device)
-        else:
-            old_states = torch.tensor(states[:,:-1]).float().to(self.device)
-            new_states = torch.tensor(states[:,1:]).float().to(self.device)
+        n_step_rewards = self.compute_n_step_rewards(rewards)
+        if debug:
+            print("n_step_rewards.shape: ", n_step_rewards.shape)
+            print("rewards.shape: ", rewards.shape)
+            print("n_step_rewards: ", n_step_rewards)
+            print("rewards: ", rewards)
             
         if bootstrap is not None:
             done[bootstrap] = False 
+        if debug:
+            print("done.shape: (before n_steps)", done.shape)
+            print("done: (before n_steps)", done)
+        
+        if self.discrete:
+            old_states = torch.tensor(states[:-1]).to(self.device)
+            
+            new_states, Gamma_V, done = self.compute_n_step_states(states, done)
+            new_states = torch.tensor(new_states).to(self.device)
+     
+        else:
+            old_states = torch.tensor(states[:,:-1]).float().to(self.device)
+            
+            new_states, Gamma_V, done = self.compute_n_step_states(states[0], done)
+            new_states = torch.tensor(new_states).float().unsqueeze(0).to(self.device)
+
+        if debug:
+            print("done.shape: (after n_steps)", done.shape)
+            print("Gamma_V.shape: ", Gamma_V.shape)
+            print("done: (after n_steps)", done)
+            print("Gamma_V: ", Gamma_V)
+            print("old_states.shape: ", old_states.shape)
+            print("new_states.shape: ", new_states.shape)
+            
+        ### Wrap variables into tensors ###
+        
         done = torch.LongTensor(done.astype(int)).to(self.device)
         log_probs = torch.stack(log_probs).to(self.device)
-        rewards = torch.tensor(rewards).float().to(self.device)
+        n_step_rewards = torch.tensor(n_step_rewards).float().to(self.device)
+        Gamma_V = torch.tensor(Gamma_V).float().to(self.device)
         
         ### Update critic and then actor ###
-        critic_loss = self.update_critic_TD(rewards, new_states, old_states, done)
-        actor_loss = self.update_actor_TD(rewards, log_probs, new_states, old_states, done)
+        critic_loss = self.update_critic_TD(n_step_rewards, new_states, old_states, done, Gamma_V)
+        actor_loss = self.update_actor_TD(n_step_rewards, log_probs, new_states, old_states, done, Gamma_V)
         
         return critic_loss, actor_loss
     
-    def update_critic_TD(self, rewards, new_states, old_states, done):
+    def update_critic_TD(self, n_step_rewards, new_states, old_states, done, Gamma_V):
         
         # Compute loss 
         
         with torch.no_grad():
             V_trg = self.critic_trg(new_states).squeeze()
-            V_trg = (1-done)*self.gamma*V_trg + rewards
+            if debug:
+                print("V_trg.shape (after critic): ", V_trg.shape)
+            V_trg = (1-done)*Gamma_V*V_trg + n_step_rewards
+            if debug:
+                print("V_trg.shape (after sum): ", V_trg.shape)
             V_trg = V_trg.squeeze()
+            if debug:
+                print("V_trg.shape (after squeeze): ", V_trg.shape)
             
         if self.twin:
-            #print(self.critic(old_states))
             V1, V2 = self.critic(old_states)
             loss1 = 0.5*F.mse_loss(V1.squeeze(), V_trg)
             loss2 = 0.5*F.mse_loss(V2.squeeze(), V_trg)
@@ -204,7 +243,7 @@ class A2C():
         
         return loss.item()
     
-    def update_actor_TD(self, rewards, log_probs, new_states, old_states, done):
+    def update_actor_TD(self, n_step_rewards, log_probs, new_states, old_states, done, Gamma_V):
         
         # Compute gradient 
         
@@ -213,13 +252,18 @@ class A2C():
             V_pred = torch.min(V1.squeeze(), V2.squeeze())
             V1_new, V2_new = self.critic(new_states)
             V_new = torch.min(V1_new.squeeze(), V2_new.squeeze())
-            V_trg = (1-done)*self.gamma*V_new + rewards
+            V_trg = (1-done)*Gamma_V*V_new + n_step_rewards
         else:
             V_pred = self.critic(old_states).squeeze()
-            V_trg = (1-done)*self.gamma*self.critic(new_states).squeeze()  + rewards
+            V_trg = (1-done)*Gamma_V*self.critic(new_states).squeeze()  + n_step_rewards
             
         A = V_trg - V_pred
         policy_gradient = - log_probs*A
+        if debug:
+            print("V_trg.shape: ",V_trg.shape)
+            print("V_pred.shape: ",V_pred.shape)
+            print("A.shape: ", A.shape)
+            print("policy_gradient.shape: ", policy_gradient.shape)
         policy_grad = torch.sum(policy_gradient)
  
         # Backpropagate and update
@@ -230,6 +274,69 @@ class A2C():
         
         return policy_grad.item()
     
+    def compute_n_step_rewards(self, rewards):
+        """
+        Computes n-steps discounted reward padding with zeros the last elements of the trajectory.
+        This means that the rewards considered are AT MOST n, but can be less for the last n-1 elements.
+        """
+        T = len(rewards)
+        
+        # concatenate n_steps zeros to the rewards -> they do not change the cumsum
+        r = np.concatenate((rewards,[0 for _ in range(self.n_steps)])) 
+        
+        Gamma = np.array([self.gamma**i for i in range(r.shape[0])])
+        
+        # reverse everything to use cumsum in right order, then reverse again
+        Gt = np.cumsum(r[::-1]*Gamma[::-1])[::-1]
+        
+        G_nstep = Gt[:T] - Gt[self.n_steps:] # compute n-steps discounted return
+        
+        Gamma = Gamma[:T]
+        
+        assert len(G_nstep) == T, "Something went wrong computing n-steps reward"
+        
+        n_steps_r = G_nstep / Gamma
+        
+        return n_steps_r
+    
+    def compute_n_step_states(self, states, done):
+        """
+        Computes n-steps target states (to be used by the critic as target values together with the
+        n-steps discounted reward). For last n-1 elements the target state is the last one available.
+        Adjusts also the `done` mask used for disabling the bootstrapping in the case of terminal states
+        and returns Gamma_V, that are the discount factors for the target state-values, since they are 
+        n-steps away (except for the last n-1 states, whose discount is adjusted accordingly).
+        
+        Return
+        ------
+        new_states, Gamma_V, done: arrays with first dimension = len(states)-1
+        """
+        
+        # Compute indexes for (at most) n-step away states 
+        
+        n_step_idx = np.arange(len(states)-1) + self.n_steps
+        diff = n_step_idx - len(states) + 1
+        mask = (diff > 0)
+        n_step_idx[mask] = len(states) - 1
+        
+        # Compute new states
+        
+        new_states = states[n_step_idx]
+        
+        # Compute discount factors
+        
+        pw = np.array([self.n_steps for _ in range(len(new_states))])
+        pw[mask] = self.n_steps - diff[mask]
+        Gamma_V = self.gamma**pw
+        
+        # Adjust done mask
+        
+        mask = (diff >= 0)
+        done[mask] = done[-1]
+        
+        return new_states, Gamma_V, done
+        
+        
     def update_MC(self, rewards, log_probs, states, done, bootstrap=None):   
         
         ### Compute MC discounted returns ###
