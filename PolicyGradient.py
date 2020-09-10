@@ -79,7 +79,7 @@ class PolicyGrad():
         policy_grad.backward()
         self.optim.step()
         return policy_grad.item()
-    
+
 class PolicyGradEnt():
     """
     Implements an RL agent with policy gradient method.

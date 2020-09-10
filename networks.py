@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F 
-    
+
 class Actor(nn.Module):
     """
     Network used to parametrize the policy of an agent.
@@ -49,7 +49,7 @@ class Actor(nn.Module):
     def forward(self, state):
         log_probs = self.net(state)
         return log_probs
-        
+
 class BasicCritic(nn.Module):
     """
     Network used to parametrize the Critic of an Actor-Critic agent.
@@ -89,7 +89,7 @@ class BasicCritic(nn.Module):
     def forward(self, state):
         V = self.net(state)
         return V
-    
+
 class Critic(nn.Module):
     """Implements a generic critic, that can have 2 independent networks is twin=True. """
     def __init__(self, observation_space, discrete=False, project_dim=4, twin=False, target=False, hiddens=[64,32]):
@@ -116,21 +116,21 @@ class Critic(nn.Module):
             v = self.net(state)
             
         return v
+
         
+
         
+
         
+
         
+
         
+
         
+
         
+
         
-        
-        
-        
-        
-        
-        
-        
-        
-        
+
     

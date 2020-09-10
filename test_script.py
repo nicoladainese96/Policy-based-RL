@@ -48,7 +48,7 @@ params = {}
 for key in P_dict.keys():
     P = hp.prior_distr(**P_dict[key])
     params[key] = P.sample(n_samples)
-    
+
 # now we make a list of dictionary instead of a dictionary of lists and we also add the last constant parameters
 list_of_dict = []
 for i in range(n_samples):
@@ -56,7 +56,7 @@ for i in range(n_samples):
     for key in params.keys():
         d[key] = params[key][i]
     list_of_dict.append(d)
-    
+
 print("Number of combinations: ", len(list_of_dict))
 
 def print_parameters(params):
@@ -72,13 +72,13 @@ def print_parameters(params):
 def print_HP_score(params,score,dev):
     print_parameters(params)
     print("Score: %.4f +/- %.4f"%(score,dev))
-    
+
 flag = True #set to True to see all combinations
 if flag == True:
     for params in list_of_dict:
         print()
         print_parameters(params)
-        
+
 import numpy as np
 import torch
 import gym
@@ -125,7 +125,7 @@ def play_episode(agent, env, return_states=False):
         return rewards, log_probs, np.array(states), done
     else:
         return rewards, log_probs, done
-    
+
 def train_cartpole_A2C(agent, env, n_episodes = 1000):
     performance = []
     print("n_episodes: ", n_episodes)
@@ -197,7 +197,7 @@ def print_parameters(params):
 def print_HP_score(params,score,dev):
     print_parameters(params)
     print("Score: %.4f +/- %.4f"%(score,dev))
-    
+
 def HP_Search(n_runs, n_episodes, list_of_HP_dict):
     
     HP_scores = []
@@ -214,7 +214,7 @@ def HP_Search(n_runs, n_episodes, list_of_HP_dict):
         HP_asymptotic_std.append(asymptotic_std)
     
     return HP_scores, HP_asymptotic_score, HP_asymptotic_std
-    
+
 class prior_distr():
     def __init__(self, discrete, var_type, distribution, **kwargs):
         self.discrete = discrete
@@ -297,7 +297,7 @@ class prior_distr():
                 u = np.random.rand(n_samples)*(np.log(self.x_max)-np.log(self.x_min)) + np.log(self.x_min)
                 samples = np.exp(u)
             return samples
-        
+
 save = True
 n_runs = 4
 n_episodes = 400

@@ -129,7 +129,7 @@ def print_parameters(params):
 def print_HP_score(params,score,dev):
     print_parameters(params)
     print("Score: %.4f +/- %.4f"%(score,dev))
-    
+
 def HP_Search(n_runs, n_episodes, list_of_HP_dict, shape_r=True, bootstrap_flag=False):
     
     HP_scores = []
@@ -148,7 +148,7 @@ def HP_Search(n_runs, n_episodes, list_of_HP_dict, shape_r=True, bootstrap_flag=
         elapsed_min = (time.time() - start)/60
         print("Evaluated  HP %d / %d - took %.2f min."%(i+1, len(list_of_HP_dict), elapsed_min))
     return HP_scores, HP_asymptotic_score, HP_asymptotic_std
-    
+
 class prior_distr():
     def __init__(self, discrete, var_type, distribution, **kwargs):
         self.discrete = discrete
