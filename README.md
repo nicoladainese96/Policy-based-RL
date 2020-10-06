@@ -25,8 +25,11 @@ The problem is that the environment returns done=True even if the episode is ter
 ## Experimental Results
 
 I used the Evaluation\_notebook to produce the following results for my Master's Thesis (follow up repository at https://github.com/nicoladainese96/SC2-RL/):
+
 <img src='Results/Plots/MC-REINFORCE-TD-v2.png'>
+
 Comparison of the REINFORCE, the 1-step Temporal Difference (1-TD) A2C andthe max-steps Temporal Difference (max-TD) A2C algorithms. All solid curves are the average of10 runs, with the number of episodes on the x axis and the moving average over 20 episodes of theepisode reward on the y axis; 500 is the maximum reward obtainable, because after that number ofsteps the episode is truncated automatically. We can see that max-TD A2C is superior to the other2 methods and REINFORCE, while achieving fast initial improvement, it’s the most unstable.
 
 <img src='Results/Plots/n-steps-A2C-v2.png'>
+
 Study of the influence of the n-steps parameter on speed and probability of convergence of then-TD A2C. All solid curves are the average of 10 runs, x and y axis represent the same variablesof (a). In this plot there is a clear trend according to which the greater the n-steps parameter, thefaster is the convergence. Also notice how the two agents with lower n-steps parameter (1 and 5)failed to converge in one run each, lowering the average asymptotic performance to approximately450 (instead of 500 if all 10 runs would have converged).
